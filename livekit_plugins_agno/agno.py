@@ -9,8 +9,9 @@ from typing import Any
 
 from agno.agent import Agent
 from agno.run.agent import RunContentEvent, RunOutput
+
+from livekit.agents.llm.chat_context import ChatContext, ChatMessage
 from livekit.agents import llm
-from livekit.agents.llm import ChatContext, ChatRole
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -109,18 +110,12 @@ class AgnoStream(llm.LLMStream):
 
     def _get_user_input(self) -> str | None:
         """Extract the last user message from chat context."""
+        chat_history = ''
         for msg in reversed(self._chat_ctx.items):
-            if msg.role == ChatRole.USER:
-                content = msg.content
-                if isinstance(content, str):
-                    return content
-                elif isinstance(content, list):
-                    # Handle multimodal - extract text parts
-                    return " ".join(
-                        p.get("text", "") if isinstance(p, dict) else str(p)
-                        for p in content
-                    )
-        return None
+            if isinstance(msg, ChatMessage):
+                content = msg.text_content
+                chat_history = content + "\n" + chat_history
+        return chat_history
 
 
 def _to_chat_chunk(event: Any) -> llm.ChatChunk | None:

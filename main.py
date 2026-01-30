@@ -18,6 +18,9 @@ from livekit.agents import (
 from livekit.plugins import noise_cancellation, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 from livekit_plugins_agno.agno import LLMAdapter
+from dotenv import load_dotenv
+
+load_dotenv()
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -130,7 +133,7 @@ async def my_agent(ctx: JobContext):
     )
 
     await session.start(
-        agent=Agent(),
+        agent=Agent(instructions="You're a helpful voice assistant."),
         room=ctx.room,
         room_options=room_io.RoomOptions(
             audio_input=room_io.AudioInputOptions(
