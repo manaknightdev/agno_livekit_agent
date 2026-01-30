@@ -3,6 +3,7 @@ from typing import Annotated
 
 from agno.agent import Agent as AgnoAgent
 from agno.models.openai import OpenAIChat
+from agno.models.openrouter import OpenRouter
 from agno.tools import tool
 from livekit import rtc
 from livekit.agents import (
@@ -88,14 +89,10 @@ def create_agno_agent() -> AgnoAgent:
 
     agent = AgnoAgent(
         # Use OpenAI's GPT-4o-mini for fast responses
-        model=OpenAIChat(id="gpt-4o-mini"),
-        # Add tools for the agent to use
+        model=OpenRouter(id="openai/gpt-oss-safeguard-20b"),
         tools=[get_current_time, get_weather, calculate],
-        # System instructions for the voice assistant
         instructions=prompt,
-        # Enable markdown for text display (TTS will handle the actual speech)
         markdown=False,
-        # Keep responses focused
         add_datetime_to_context=True,
     )
 
@@ -123,7 +120,7 @@ async def my_agent(ctx: JobContext):
 
     session = AgentSession(
         stt=inference.STT(model="assemblyai/universal-streaming", language="en"),
-        llm=LLMAdapter(agent=create_agno_agent()),
+        llm=LLMAdapter(agent=create_agno_agent(), session_id=ctx.room.sid),
         tts=inference.TTS(
             model="cartesia/sonic-3", voice="9626c31c-bec5-4cca-baa8-f8ba9e84c8bc"
         ),

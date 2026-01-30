@@ -53,6 +53,7 @@ class LLMAdapter(llm.LLM):
         chat_ctx: ChatContext,
         tools: list[llm.Tool] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        # these are unused, since tool execution takes place in agno
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
@@ -110,12 +111,12 @@ class AgnoStream(llm.LLMStream):
 
     def _get_user_input(self) -> str | None:
         """Extract the last user message from chat context."""
-        chat_history = ''
+        
         for msg in reversed(self._chat_ctx.items):
-            if isinstance(msg, ChatMessage):
+            if isinstance(msg, ChatMessage) and msg.role == "user":
                 content = msg.text_content
-                chat_history = content + "\n" + chat_history
-        return chat_history
+                return content
+        return None
 
 
 def _to_chat_chunk(event: Any) -> llm.ChatChunk | None:
