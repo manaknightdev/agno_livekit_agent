@@ -1,38 +1,23 @@
-"""
-LiveKit Voice Agent with Agno Integration
-
-This example demonstrates how to build a voice agent using LiveKit's
-VoicePipelineAgent with Agno's powerful agentic capabilities including
-tool calling, knowledge bases, and memory.
-
-Requirements:
-    - LIVEKIT_URL and LIVEKIT_API_KEY/LIVEKIT_API_SECRET environment variables
-    - OPENAI_API_KEY for the Agno agent
-    - DEEPGRAM_API_KEY for STT/TTS (or use other providers)
-
-Run with:
-    python main.py dev
-"""
-
 import logging
 from typing import Annotated
 
-from agno.agent import Agent
+from agno.agent import Agent as AgnoAgent
 from agno.models.openai import OpenAIChat
 from agno.tools import tool
-from dotenv import load_dotenv
+from livekit import rtc
 from livekit.agents import (
-    AutoSubscribe,
+    Agent,
+    AgentServer,
+    AgentSession,
     JobContext,
-    WorkerOptions,
+    JobProcess,
     cli,
-    llm,
+    inference,
+    room_io,
 )
-from livekit.agents.pipeline import VoicePipelineAgent
-from livekit.plugins import deepgram, silero
-
-from livekit_plugins_agno import LLMAdapter
-
+from livekit.plugins import noise_cancellation, silero
+from livekit.plugins.turn_detector.multilingual import MultilingualModel
+from livekit_plugins_agno.agno import LLMAdapter
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -75,17 +60,8 @@ def calculate(
 # Create the Agno agent
 # =============================================================================
 
-
-def create_agno_agent() -> Agent:
-    """Create and configure the Agno agent with tools and instructions."""
-
-    agent = Agent(
-        # Use OpenAI's GPT-4o-mini for fast responses
-        model=OpenAIChat(id="gpt-4o-mini"),
-        # Add tools for the agent to use
-        tools=[get_current_time, get_weather, calculate],
-        # System instructions for the voice assistant
-        instructions="""You are a helpful voice assistant. 
+prompt = """
+You are a helpful voice assistant. 
 
 Key behaviors:
 - Keep responses concise and conversational - you're speaking, not writing
@@ -100,7 +76,20 @@ You have access to tools for:
 - Performing calculations
 
 Remember: Your responses will be spoken aloud, so avoid long lists, 
-markdown formatting, or complex technical jargon.""",
+markdown formatting, or complex technical jargon.
+"""
+
+
+def create_agno_agent() -> AgnoAgent:
+    """Create and configure the Agno agent with tools and instructions."""
+
+    agent = AgnoAgent(
+        # Use OpenAI's GPT-4o-mini for fast responses
+        model=OpenAIChat(id="gpt-4o-mini"),
+        # Add tools for the agent to use
+        tools=[get_current_time, get_weather, calculate],
+        # System instructions for the voice assistant
+        instructions=prompt,
         # Enable markdown for text display (TTS will handle the actual speech)
         markdown=False,
         # Keep responses focused
@@ -113,71 +102,48 @@ markdown formatting, or complex technical jargon.""",
 # =============================================================================
 # LiveKit agent entrypoint
 # =============================================================================
+server = AgentServer()
 
 
-async def entrypoint(ctx: JobContext):
-    """
-    Main entrypoint for the LiveKit voice agent.
+def prewarm(proc: JobProcess):
+    proc.userdata["vad"] = silero.VAD.load()
 
-    This function is called when a new room is created and the agent joins.
-    It sets up the voice pipeline with Agno as the LLM backend.
-    """
-    logger.info(f"Connecting to room: {ctx.room.name}")
 
-    # Wait for the first participant to connect
-    await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
+server.setup_fnc = prewarm
 
-    # Wait for a participant to join
-    participant = await ctx.wait_for_participant()
-    logger.info(f"Participant joined: {participant.identity}")
 
-    # Create the Agno agent
-    agno_agent = create_agno_agent()
+@server.rtc_session()
+async def my_agent(ctx: JobContext):
+    ctx.log_context_fields = {
+        "room": ctx.room.name,
+    }
 
-    # Wrap it with the LiveKit adapter
-    livekit_llm = LLMAdapter(
-        agno_agent,
-        session_id=ctx.room.name,
-        user_id=participant.identity,
+    session = AgentSession(
+        stt=inference.STT(model="assemblyai/universal-streaming", language="en"),
+        llm=LLMAdapter(agent=create_agno_agent()),
+        tts=inference.TTS(
+            model="cartesia/sonic-3", voice="9626c31c-bec5-4cca-baa8-f8ba9e84c8bc"
+        ),
+        turn_detection=MultilingualModel(),
+        vad=ctx.proc.userdata["vad"],
+        preemptive_generation=True,
     )
 
-    # Create the voice pipeline agent
-    assistant = VoicePipelineAgent(
-        vad=silero.VAD.load(),
-        stt=deepgram.STT(),
-        llm=livekit_llm,
-        tts=deepgram.TTS(),
+    await session.start(
+        agent=Agent(),
+        room=ctx.room,
+        room_options=room_io.RoomOptions(
+            audio_input=room_io.AudioInputOptions(
+                noise_cancellation=lambda params: noise_cancellation.BVCTelephony()
+                if params.participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP
+                else noise_cancellation.BVC(),
+            ),
+        ),
     )
 
-    # Set up event handlers
-    @assistant.on("user_speech_committed")
-    def on_user_speech(msg: llm.ChatMessage):
-        logger.info(f"User said: {msg.content}")
-
-    @assistant.on("agent_speech_committed")
-    def on_agent_speech(msg: llm.ChatMessage):
-        logger.info(f"Agent said: {msg.content}")
-
-    # Start the assistant
-    assistant.start(ctx.room, participant)
-
-    # Greet the user
-    await assistant.say(
-        "Hello! I'm your voice assistant powered by Agno. "
-        "I can help you with the time, weather, calculations, and more. "
-        "How can I help you today?",
-        allow_interruptions=True,
-    )
-
-
-# =============================================================================
-# Main
-# =============================================================================
+    # Join the room and connect to the user
+    await ctx.connect()
 
 
 if __name__ == "__main__":
-    # Load environment variables from .env file
-    load_dotenv()
-
-    # Run the LiveKit agent
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(server)

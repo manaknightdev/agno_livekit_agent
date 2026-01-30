@@ -109,7 +109,7 @@ class AgnoStream(llm.LLMStream):
 
     def _get_user_input(self) -> str | None:
         """Extract the last user message from chat context."""
-        for msg in reversed(self._chat_ctx.messages):
+        for msg in reversed(self._chat_ctx.items):
             if msg.role == ChatRole.USER:
                 content = msg.content
                 if isinstance(content, str):
